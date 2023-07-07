@@ -5,6 +5,7 @@ import "../src/V3Utils.sol";
 import "./utils/BaseTest.sol";
 import "./utils/IRouteProcessor.sol";
 import "./utils/RouteProcessorHelper.sol";
+import "v3-periphery/interfaces/IQuoterV2.sol";
 
 contract RP3Test is BaseTest {
     V3Utils v3Utils;
@@ -14,10 +15,12 @@ contract RP3Test is BaseTest {
 
     INonfungiblePositionManager public nonfungiblePositionManager;
     IRouteProcessor public routeProcessor;
-    RouteProcessorHelper routeProcessorHelper;
+    RouteProcessorHelper public routeProcessorHelper;
+    IQuoterV2 public quoterV2;
 
     IERC20 public WETH;
     IERC20 public USDC;
+    IERC20 public USDT;
     IERC20 public SUSHI;
 
     function setUp() public override {
@@ -26,12 +29,14 @@ contract RP3Test is BaseTest {
 
         WETH = IERC20(constants.getAddress("mainnet.weth"));
         USDC = IERC20(constants.getAddress("mainnet.usdc"));
+        USDT = IERC20(constants.getAddress("mainnet.usdt"));
         SUSHI = IERC20(constants.getAddress("mainnet.sushi"));
 
         nonfungiblePositionManager = INonfungiblePositionManager(constants.getAddress("mainnet.nonfungiblePositionManager"));
         routeProcessor = IRouteProcessor(
             constants.getAddress("mainnet.routeProcessor")
         );
+        quoterV2 = IQuoterV2(constants.getAddress("mainnet.quoterV2"));
         routeProcessorHelper = new RouteProcessorHelper(
             constants.getAddress("mainnet.v2Factory"),
             constants.getAddress("mainnet.v3Factory"),
@@ -55,7 +60,7 @@ contract RP3Test is BaseTest {
             true, // isV2
             address(WETH),
             address(SUSHI),
-            300,
+            3000,
             address(v3Utils)
         );
 
@@ -111,7 +116,7 @@ contract RP3Test is BaseTest {
             true, // isV2
             address(WETH),
             address(USDC),
-            300,
+            3000,
             address(v3Utils)
         );
 
@@ -166,7 +171,7 @@ contract RP3Test is BaseTest {
             true, // isV2
             address(USDC),
             address(WETH),
-            300,
+            3000,
             address(v3Utils)
         );
 
@@ -176,7 +181,7 @@ contract RP3Test is BaseTest {
             amount,
             1,
             alice,
-           abi.encode(
+            abi.encode(
                 address(routeProcessor),
                 abi.encodeWithSelector(
                     routeProcessor.processRoute.selector,
@@ -209,5 +214,197 @@ contract RP3Test is BaseTest {
         assertEq(feeBalance, 0);
         uint256 otherFeeBalance = USDC.balanceOf(feeRecipient);
         assertEq(otherFeeBalance, 0);
+    }
+
+    function testZapInSUSHI_WETH() public {
+        // zap in with SUSHI
+        uint256 amount = 100 ether; // 100 sushi
+        uint256 swapAmount = amount / 2;
+        uint24 fee = 3000;
+
+        deal(address(SUSHI), user, amount);
+
+        // IUniswapV3Pool sushiWethPool = IUniswapV3Pool(0x87C7056BBE6084f03304196Be51c6B90B6d85Aa2);
+
+        // TODO: just use RP to quote
+        (, bytes memory quoteData) = address(quoterV2).call(
+            abi.encodeWithSelector(
+                quoterV2.quoteExactInputSingle.selector,
+                IQuoterV2.QuoteExactInputSingleParams(address(SUSHI),
+                address(WETH),
+                swapAmount,
+                fee,
+                0)
+            )
+        );
+
+        (uint256 quotedAmountOut, , ,) = abi.decode(quoteData, (uint256, uint160, uint32, uint256));
+
+        bytes memory computedRoute = routeProcessorHelper.computeRoute(
+            false,
+            false, // isV2
+            address(SUSHI),
+            address(WETH),
+            3000,
+            address(v3Utils)
+        );
+
+        bytes memory swapData = abi.encode(
+            address(routeProcessor),
+            abi.encodeWithSelector(
+                routeProcessor.processRoute.selector,
+                address(SUSHI),
+                swapAmount,
+                address(WETH),
+                1,
+                address(v3Utils),
+                computedRoute
+            )
+        );
+
+        V3Utils.SwapAndMintParams memory params = V3Utils.SwapAndMintParams(
+            SUSHI, //token0
+            WETH, //token1
+            fee, //fee
+            -887220, //tickLower
+            887220, //tickUpper
+            amount, //amount0
+            0, //amount1
+            user, //dust recipient
+            user, //nft recipient
+            block.timestamp, //deadline
+            SUSHI, //swapSourceToken
+            0, //amountIn0
+            0, //amountOut0Min
+            "", //swapData0
+            swapAmount, //amountIn1
+            1, //amountOut1Min
+            swapData, //swapData1
+            1, //amountAddMin0
+            1, //amountAddMin1
+            "" //returnData
+        );
+
+        vm.startPrank(user);
+        SUSHI.approve(address(v3Utils), amount);
+
+        (
+            uint256 tokenId,
+            uint128 liquidity,
+            uint256 amount0,
+            uint256 amount1
+        ) = v3Utils.swapAndMint(params);
+
+        vm.stopPrank();
+
+        // TODO: check fee
+        // uint256 feeBalance = DAI.balanceOf(TEST_FEE_ACCOUNT);
+        // assertEq(feeBalance, 9845545793003026);
+
+        assertGt(tokenId, 0);
+        assertGt(liquidity, 0);
+        assertGt(amount0, 0);
+        assertGt(amount1, 0);
+
+        assertEq(amount1, quotedAmountOut);
+    }
+
+    function testZapInWithETH() public {
+        // zap in with ETH
+        uint256 amount = 1 ether;
+        uint256 swapAmount = amount / 2;
+        uint24 fee = 100;
+
+        deal(user, 2 ether);
+
+        // IUniswapV3Pool usdcUsdtPool = IUniswapV3Pool(0xfA6e8E97ecECDC36302eCA534f63439b1E79487B);
+
+        bytes memory route0 = routeProcessorHelper.computeRoute(
+            false,
+            false, // isV2
+            address(WETH),
+            address(USDC),
+            500,
+            address(v3Utils)
+        );
+
+        bytes memory swapData0 = abi.encode(
+            address(routeProcessor),
+            abi.encodeWithSelector(
+                routeProcessor.processRoute.selector,
+                address(WETH),
+                swapAmount,
+                address(USDC),
+                1,
+                address(v3Utils),
+                route0
+            )
+        );
+
+        bytes memory route1 = routeProcessorHelper.computeRoute(
+            false,
+            false, // isV2,
+            address(WETH),
+            address(USDT),
+            500,
+            address(v3Utils)
+        );
+
+        bytes memory swapData1 = abi.encode(
+            address(routeProcessor),
+            abi.encodeWithSelector(
+                routeProcessor.processRoute.selector,
+                address(WETH),
+                swapAmount,
+                address(USDT),
+                1,
+                address(v3Utils),
+                route1
+            )
+        );
+
+        V3Utils.SwapAndMintParams memory params = V3Utils.SwapAndMintParams(
+            USDC, //token0
+            USDT, //token1
+            fee, //fee
+            -887272, //tickLower
+            887272, //tickUpper
+            0, //amount0
+            0, //amount1
+            user, //dust recipient
+            user, //nft recipient
+            block.timestamp, //deadline
+            WETH, //swapSourceToken
+            swapAmount, //amountIn0
+            1, //amountOut0Min
+            swapData0, //swapData0
+            swapAmount, //amountIn1
+            1, //amountOut1Min
+            swapData1, //swapData1
+            0, //amountAddMin0
+            0, //amountAddMin1
+            "" //returnData
+        );
+
+        vm.startPrank(user);
+
+        (
+            uint256 tokenId,
+            uint128 liquidity,
+            uint256 amount0,
+            uint256 amount1
+        ) = v3Utils.swapAndMint{value: 1 ether}(params);
+
+        vm.stopPrank();
+
+        // TODO: check fees
+        // close to 1% of swapped amount
+        // uint256 feeBalance = DAI.balanceOf(TEST_FEE_ACCOUNT);
+        // assertEq(feeBalance, 9845545793003026);
+
+        assertGt(tokenId, 0);
+        assertGt(liquidity, 0);
+        assertGt(amount0, 0);
+        assertGt(amount1, 0);
     }
 }

@@ -4,6 +4,7 @@ pragma solidity >=0.8.0;
 //import "/interfaces/IUniswapV3Factory.sol";
 //import "interfaces/IUniswapV3Pool.sol";
 //import "interfaces/IUniswapV2Pair.sol";
+import "v3-core/interfaces/IUniswapV3Pool.sol";
 
 interface IUniswapV2Factory {
   function getPair(address tokenA, address tokenB) external view returns (address pair);
@@ -18,10 +19,10 @@ interface IUniswapV2Pair {
   function token1() external view returns (address);
 }
 
-interface IUniswapV3Pool {
-  function token0() external view returns (address);
-  function token1() external view returns (address);
-}
+// interface IUniswapV3Pool {
+//   function token0() external view returns (address);
+//   function token1() external view returns (address);
+// }
 
 contract RouteProcessorHelper {
   IUniswapV2Factory public v2Factory;
